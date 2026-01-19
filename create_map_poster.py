@@ -446,6 +446,23 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
     ax.set_position([0, 0, 1, 1])
     
     # 3. Plot Layers
+    
+    def filter_geom(gdf, geom_types):
+        """Filter GeoDataFrame to only retain specified geometry types."""
+        if gdf is None or gdf.empty:
+            return gdf
+        return gdf[gdf.geometry.type.isin(geom_types)]
+
+    # Filter area features to only show actual areas (Polygons/MultiPolygons)
+    # This prevents single nodes (Points) like water fountains or small park nodes from appearing as dots
+    area_features = ['Polygon', 'MultiPolygon']
+    water = filter_geom(water, area_features)
+    parks = filter_geom(parks, area_features)
+    forests = filter_geom(forests, area_features)
+    beaches = filter_geom(beaches, area_features)
+    education = filter_geom(education, area_features)
+    airports = filter_geom(airports, area_features)
+    
     # Layer 0: Base natural features
     if coastlines is not None and not coastlines.empty:
         coastlines.plot(ax=ax, edgecolor=THEME.get('coastline', '#1E90FF'), linewidth=1.25, facecolor='none', zorder=0.5)
@@ -486,6 +503,8 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
     ox.plot_graph(
         G, ax=ax, bgcolor=THEME['bg'],
         node_size=0,
+        node_color=THEME['bg'],
+        node_alpha=0,
         edge_color=edge_colors,
         edge_linewidth=edge_widths,
         show=False, close=False
