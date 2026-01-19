@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import osmnx as ox
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
@@ -8,12 +9,20 @@ from tqdm import tqdm
 import time
 import json
 import os
+import sys
+import pickle
+import hashlib
 from datetime import datetime
 import argparse
+
+# Fix encoding for Windows console
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 THEMES_DIR = "themes"
 FONTS_DIR = "fonts"
 POSTERS_DIR = "posters"
+CACHE_DIR = "cache"
 
 def load_fonts():
     """
@@ -213,35 +222,222 @@ def get_coordinates(city, country):
     else:
         raise ValueError(f"Could not find coordinates for {city}, {country}")
 
-def create_poster(city, country, point, dist, output_file):
+def get_stadium_color():
+    """
+    Returns the color for stadiums from the theme.
+    """
+    return THEME.get('stadiums', '#E8D5B7')
+
+def get_enabled_features(theme):
+    """
+    Detect which features are enabled in the theme.
+    Returns a dict of feature names mapped to boolean enabled status.
+    """
+    feature_keys = {
+        'water': 'water',
+        'parks': 'parks', 
+        'stadiums': 'stadiums',
+        'railway': 'railway',
+        'forest': 'forest',
+        'beach': 'beach',
+        'coastline': 'coastline',
+        'education': 'education',
+        'worship': 'worship',
+        'airport': 'airport'
+    }
+    
+    enabled = {}
+    for feature_name, theme_key in feature_keys.items():
+        enabled[feature_name] = theme_key in theme
+    
+    return enabled
+
+def get_cache_key(point, dist, network_type, enabled_features):
+    """
+    Generate a unique cache key based on location, distance, network type, and enabled features.
+    """
+    lat, lon = point
+    # Sort enabled features for consistent hashing
+    features_str = '_'.join(sorted([k for k, v in enabled_features.items() if v]))
+    key_string = f"{lat:.6f}_{lon:.6f}_{dist}_{network_type}_{features_str}"
+    return hashlib.md5(key_string.encode()).hexdigest()
+
+def save_to_cache(cache_key, data):
+    """
+    Save fetched OSM data to cache directory.
+    """
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+    
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.pkl")
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"✓ Saved to cache: {cache_key[:8]}...")
+    except Exception as e:
+        print(f"⚠ Could not save cache: {e}")
+
+def load_from_cache(cache_key):
+    """
+    Load OSM data from cache if it exists.
+    Returns None if cache miss.
+    """
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.pkl")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'rb') as f:
+                data = pickle.load(f)
+            print(f"✓ Loaded from cache: {cache_key[:8]}...")
+            return data
+        except Exception as e:
+            print(f"⚠ Cache corrupted, will re-download: {e}")
+            return None
+    return None
+
+def create_poster(city, country, point, dist, output_file, use_cache=True, network_type='drive'):
     print(f"\nGenerating map for {city}, {country}...")
     
-    # Progress bar for data fetching
-    with tqdm(total=3, desc="Fetching map data", unit="step", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
-        # 1. Fetch Street Network
-        pbar.set_description("Downloading street network")
-        G = ox.graph_from_point(point, dist=dist, dist_type='bbox', network_type='all')
-        pbar.update(1)
-        time.sleep(0.5)  # Rate limit between requests
-        
-        # 2. Fetch Water Features
-        pbar.set_description("Downloading water features")
-        try:
-            water = ox.features_from_point(point, tags={'natural': 'water', 'waterway': 'riverbank'}, dist=dist)
-        except:
-            water = None
-        pbar.update(1)
-        time.sleep(0.3)
-        
-        # 3. Fetch Parks
-        pbar.set_description("Downloading parks/green spaces")
-        try:
-            parks = ox.features_from_point(point, tags={'leisure': 'park', 'landuse': 'grass'}, dist=dist)
-        except:
-            parks = None
-        pbar.update(1)
+    # Detect which features are enabled in the current theme
+    enabled_features = get_enabled_features(THEME)
+    enabled_count = sum(enabled_features.values())
     
-    print("✓ All data downloaded successfully!")
+    # Show which features will be fetched
+    enabled_list = [k for k, v in enabled_features.items() if v]
+    if enabled_list:
+        print(f"Theme uses {enabled_count} features: {', '.join(enabled_list)}")
+    
+    # Generate cache key
+    cache_key = get_cache_key(point, dist, network_type, enabled_features)
+    
+    # Try to load from cache
+    cached_data = None
+    if use_cache:
+        cached_data = load_from_cache(cache_key)
+    
+    if cached_data is not None:
+        # Unpack cached data
+        G, water, parks, stadiums, railways, forests, beaches, coastlines, education, worship, airports = cached_data
+        print("✓ Using cached map data!")
+    else:
+        # Progress bar for data fetching (1 for streets + enabled features)
+        total_steps = 1 + enabled_count
+        print("Downloading fresh map data...")
+        
+        # Initialize all features as None
+        water = parks = stadiums = railways = forests = beaches = coastlines = education = worship = airports = None
+        
+        with tqdm(total=total_steps, desc="Fetching map data", unit="step", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
+            # 1. Fetch Street Network (always needed)
+            pbar.set_description("Downloading street network")
+            G = ox.graph_from_point(point, dist=dist, dist_type='bbox', network_type=network_type)
+            pbar.update(1)
+            time.sleep(0.5)  # Rate limit between requests
+            
+            # 2. Fetch Water Features (conditional)
+            if enabled_features['water']:
+                pbar.set_description("Downloading water features")
+                try:
+                    water = ox.features_from_point(point, tags={'natural': 'water', 'waterway': 'riverbank'}, dist=dist)
+                except:
+                    water = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 3. Fetch Parks (conditional)
+            if enabled_features['parks']:
+                pbar.set_description("Downloading parks/green spaces")
+                try:
+                    parks = ox.features_from_point(point, tags={'leisure': 'park', 'landuse': 'grass'}, dist=dist)
+                except:
+                    parks = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 4. Fetch Stadiums (conditional)
+            if enabled_features['stadiums']:
+                pbar.set_description("Downloading stadiums")
+                try:
+                    stadiums = ox.features_from_point(point, tags={'leisure': 'stadium', 'building': 'stadium'}, dist=dist)
+                except:
+                    stadiums = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 5. Fetch Railways (conditional)
+            if enabled_features['railway']:
+                pbar.set_description("Downloading railways/transit")
+                try:
+                    railways = ox.features_from_point(point, tags={'railway': ['rail', 'subway', 'tram', 'light_rail']}, dist=dist)
+                except:
+                    railways = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 6. Fetch Forests (conditional)
+            if enabled_features['forest']:
+                pbar.set_description("Downloading forests/woods")
+                try:
+                    forests = ox.features_from_point(point, tags={'natural': 'wood', 'landuse': 'forest'}, dist=dist)
+                except:
+                    forests = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 7. Fetch Beaches (conditional)
+            if enabled_features['beach']:
+                pbar.set_description("Downloading beaches")
+                try:
+                    beaches = ox.features_from_point(point, tags={'natural': 'beach'}, dist=dist)
+                except:
+                    beaches = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 8. Fetch Coastlines (conditional)
+            if enabled_features['coastline']:
+                pbar.set_description("Downloading coastlines")
+                try:
+                    coastlines = ox.features_from_point(point, tags={'natural': 'coastline'}, dist=dist)
+                except:
+                    coastlines = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 9. Fetch Education (conditional)
+            if enabled_features['education']:
+                pbar.set_description("Downloading education facilities")
+                try:
+                    education = ox.features_from_point(point, tags={'amenity': ['university', 'college', 'school']}, dist=dist)
+                except:
+                    education = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 10. Fetch Places of Worship (conditional)
+            if enabled_features['worship']:
+                pbar.set_description("Downloading places of worship")
+                try:
+                    worship = ox.features_from_point(point, tags={'amenity': 'place_of_worship'}, dist=dist)
+                except:
+                    worship = None
+                pbar.update(1)
+                time.sleep(0.3)
+            
+            # 11. Fetch Airports (conditional)
+            if enabled_features['airport']:
+                pbar.set_description("Downloading airports")
+                try:
+                    airports = ox.features_from_point(point, tags={'aeroway': ['aerodrome', 'runway', 'apron']}, dist=dist)
+                except:
+                    airports = None
+                pbar.update(1)
+        
+        print("✓ All data downloaded successfully!")
+        
+        # Save to cache
+        if use_cache:
+            cache_data = (G, water, parks, stadiums, railways, forests, beaches, coastlines, education, worship, airports)
+            save_to_cache(cache_key, cache_data)
     
     # 2. Setup Plot
     print("Rendering map...")
@@ -250,11 +446,37 @@ def create_poster(city, country, point, dist, output_file):
     ax.set_position([0, 0, 1, 1])
     
     # 3. Plot Layers
-    # Layer 1: Polygons
+    # Layer 0: Base natural features
+    if coastlines is not None and not coastlines.empty:
+        coastlines.plot(ax=ax, edgecolor=THEME.get('coastline', '#1E90FF'), linewidth=1.25, facecolor='none', zorder=0.5)
+    
+    # Layer 1: Area fills - natural features
+    if forests is not None and not forests.empty:
+        forests.plot(ax=ax, facecolor=THEME.get('forest', '#228B22'), edgecolor='none', zorder=1)
+    if beaches is not None and not beaches.empty:
+        beaches.plot(ax=ax, facecolor=THEME.get('beach', '#F4A460'), edgecolor='none', zorder=1.2)
     if water is not None and not water.empty:
-        water.plot(ax=ax, facecolor=THEME['water'], edgecolor='none', zorder=1)
+        water.plot(ax=ax, facecolor=THEME['water'], edgecolor='none', zorder=1.5)
+    
+    # Layer 2: Area fills - urban features
     if parks is not None and not parks.empty:
         parks.plot(ax=ax, facecolor=THEME['parks'], edgecolor='none', zorder=2)
+    if airports is not None and not airports.empty:
+        airports.plot(ax=ax, facecolor=THEME.get('airport', '#D3D3D3'), edgecolor='none', alpha=0.6, zorder=2.2)
+    if education is not None and not education.empty:
+        education.plot(ax=ax, facecolor=THEME.get('education', '#FFD700'), edgecolor='none', alpha=0.5, zorder=2.3)
+    
+    # Layer 3: Point features
+    if stadiums is not None and not stadiums.empty:
+        # Plot as circles (centroids) instead of shapes
+        stadiums.geometry.centroid.plot(ax=ax, color=THEME.get('stadiums', '#E8D5B7'), markersize=80, zorder=3)
+    if worship is not None and not worship.empty:
+        # Plot places of worship as small points
+        worship.geometry.centroid.plot(ax=ax, color=THEME.get('worship', '#8B4513'), markersize=30, zorder=3)
+    
+    # Layer 4: Railways (before roads)
+    if railways is not None and not railways.empty:
+        railways.plot(ax=ax, edgecolor=THEME.get('railway', '#A9A9A9'), linewidth=0.8, facecolor='none', zorder=3.5)
     
     # Layer 2: Roads with hierarchy coloring
     print("Applying road hierarchy colors...")
@@ -296,25 +518,45 @@ def create_poster(city, country, point, dist, output_file):
             color=THEME['text'], ha='center', fontproperties=font_sub, zorder=11)
     
     lat, lon = point
-    coords = f"{lat:.4f}° N / {lon:.4f}° E" if lat >= 0 else f"{abs(lat):.4f}° S / {lon:.4f}° E"
-    if lon < 0:
-        coords = coords.replace("E", "W")
     
-    ax.text(0.5, 0.07, coords, transform=ax.transAxes,
+    # Format coordinates with spaces around / and bold cardinal directions
+    lat_dir = 'N' if lat >= 0 else 'S'
+    lon_dir = 'E' if lon >= 0 else 'W'
+    
+    # Create coordinate string with spaces around /
+    coords_base = f"{abs(lat):.4f}° {lat_dir}  /  {abs(lon):.4f}° {lon_dir}"
+    
+    # For bold cardinal directions, we'll use matplotlib's text with different weights
+    # Create the full string but we'll render it with formatting
+    if FONTS:
+        font_coords_bold = FontProperties(fname=FONTS['bold'], size=14)
+    else:
+        font_coords_bold = FontProperties(family='monospace', weight='bold', size=14)
+    
+    # Split and render with bold cardinal directions
+    # Using a single text element with the formatted string
+    lat_str = f"{abs(lat):.4f}°"
+    lon_str = f"{abs(lon):.4f}°"
+    
+    # Build formatted coordinate string with bold markers
+    # We'll use matplotlib's text formatting: $\mathbf{X}$ for bold
+    coords_formatted = f"{lat_str} $\\mathbf{{{lat_dir}}}$  /  {lon_str} $\\mathbf{{{lon_dir}}}$"
+    
+    ax.text(0.5, 0.07, coords_formatted, transform=ax.transAxes,
             color=THEME['text'], alpha=0.7, ha='center', fontproperties=font_coords, zorder=11)
     
     ax.plot([0.4, 0.6], [0.125, 0.125], transform=ax.transAxes, 
-            color=THEME['text'], linewidth=1, zorder=11)
+            color=THEME['text'], linewidth=0.5, zorder=11)
 
-    # --- ATTRIBUTION (bottom right) ---
-    if FONTS:
-        font_attr = FontProperties(fname=FONTS['light'], size=8)
-    else:
-        font_attr = FontProperties(family='monospace', size=8)
+    # # --- ATTRIBUTION (bottom right) ---
+    # if FONTS:
+    #     font_attr = FontProperties(fname=FONTS['light'], size=8)
+    # else:
+    #     font_attr = FontProperties(family='monospace', size=8)
     
-    ax.text(0.98, 0.02, "© OpenStreetMap contributors", transform=ax.transAxes,
-            color=THEME['text'], alpha=0.5, ha='right', va='bottom', 
-            fontproperties=font_attr, zorder=11)
+    # ax.text(0.98, 0.02, "© OpenStreetMap contributors", transform=ax.transAxes,
+    #         color=THEME['text'], alpha=0.5, ha='right', va='bottom', 
+    #         fontproperties=font_attr, zorder=11)
 
     # 5. Save
     print(f"Saving to {output_file}...")
@@ -420,6 +662,10 @@ Examples:
     parser.add_argument('--country', '-C', type=str, help='Country name')
     parser.add_argument('--theme', '-t', type=str, default='feature_based', help='Theme name (default: feature_based)')
     parser.add_argument('--distance', '-d', type=int, default=29000, help='Map radius in meters (default: 29000)')
+    parser.add_argument('--network-type', '-n', type=str, default='drive', 
+                        choices=['drive', 'all', 'walk', 'bike'],
+                        help='Street network type: drive (faster), all (complete), walk, bike (default: drive)')
+    parser.add_argument('--no-cache', action='store_true', help='Disable caching, always download fresh data')
     parser.add_argument('--list-themes', action='store_true', help='List all available themes')
     
     args = parser.parse_args()
@@ -458,7 +704,9 @@ Examples:
     try:
         coords = get_coordinates(args.city, args.country)
         output_file = generate_output_filename(args.city, args.theme)
-        create_poster(args.city, args.country, coords, args.distance, output_file)
+        use_cache = not args.no_cache
+        create_poster(args.city, args.country, coords, args.distance, output_file, 
+                     use_cache=use_cache, network_type=args.network_type)
         
         print("\n" + "=" * 50)
         print("✓ Poster generation complete!")
@@ -469,3 +717,4 @@ Examples:
         import traceback
         traceback.print_exc()
         os.sys.exit(1)
+        
