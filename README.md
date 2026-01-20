@@ -239,6 +239,43 @@ Create a JSON file in `themes/` directory:
 | `road_residential` | Color | Residential streets | `#4A4A4A` |
 | `road_default` | Color | Other roads | `#3A3A3A` |
 
+### Using Gradients 🌈
+
+Any color attribute (water, parks, roads, etc.) can be replaced with a gradient definition instead of a solid hex color.
+
+**Gradient Structure:**
+```json
+"water": {
+  "type": "gradient",
+  "colors": ["#000033", "#000088"], 
+  "direction": "vertical"
+}
+```
+
+- **colors**: Array of hex codes (2 or more) for the gradient stops
+- **direction**: `vertical` (top-to-bottom) or `horizontal` (left-to-right)
+
+**Example with multiple gradients:**
+```json
+{
+  "water": { 
+      "type": "gradient", 
+      "colors": ["#000033", "#000088"], 
+      "direction": "vertical" 
+  },
+  "parks": { 
+      "type": "gradient", 
+      "colors": ["#003300", "#00FF00"], 
+      "direction": "horizontal" 
+  },
+  "road_motorway": { 
+      "type": "gradient", 
+      "colors": ["#FF0055", "#FF5500"], 
+      "direction": "horizontal" 
+  }
+}
+```
+
 ### OpenStreetMap Feature Tags
 
 The script fetches data from OpenStreetMap using the following tags:

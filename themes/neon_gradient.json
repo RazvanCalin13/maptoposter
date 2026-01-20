@@ -1,0 +1,38 @@
+{
+    "name": "Neon Gradient",
+    "description": "Vibrant cyberpunk theme with gradient elements",
+    "bg": "#050510",
+    "text": "#00FFFF",
+    "gradient_color": "#FF00FF",
+    "water": {
+        "type": "gradient",
+        "colors": [
+            "#000033",
+            "#000088"
+        ],
+        "direction": "vertical"
+    },
+    "parks": {
+        "type": "gradient",
+        "colors": [
+            "#003300",
+            "#00FF00"
+        ],
+        "direction": "horizontal"
+    },
+    "road_motorway": {
+        "type": "gradient",
+        "colors": [
+            "#FF0055",
+            "#FF5500"
+        ],
+        "direction": "horizontal"
+    },
+    "road_primary": "#00FFFF",
+    "road_secondary": "#008888",
+    "road_tertiary": "#004444",
+    "road_residential": "#002222",
+    "road_default": "#002222",
+    "airport": "#202020",
+    "education": "#202040"
+}

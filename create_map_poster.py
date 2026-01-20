@@ -14,6 +14,9 @@ import pickle
 import hashlib
 from datetime import datetime
 import argparse
+from matplotlib.path import Path
+from matplotlib.patches import PathPatch
+
 
 # Fix encoding for Windows console
 if sys.platform == 'win32':
@@ -140,37 +143,207 @@ def create_gradient_fade(ax, color, location='bottom', zorder=10):
     ax.imshow(gradient, extent=[xlim[0], xlim[1], y_bottom, y_top], 
               aspect='auto', cmap=custom_cmap, zorder=zorder, origin='lower')
 
-def get_edge_colors_by_type(G):
+def parse_color_config(config):
+    """
+    Parse a color configuration from the theme.
+    Returns (is_gradient, value)
+    value is either a hex string or a dict/list for gradient.
+    """
+    if isinstance(config, list):
+        # Assume simple list is a vertical gradient
+        return True, {"type": "gradient", "colors": config, "direction": "vertical"}
+    if isinstance(config, dict) and config.get('type') == 'gradient':
+        return True, config
+    return False, config
+
+def create_gradient_array(width, height, colors, direction='vertical'):
+    """
+    Create a gradient RGBA array.
+    """
+    cmap = mcolors.LinearSegmentedColormap.from_list('feature_gradient', colors)
+    
+    if direction == 'vertical':
+        gradient = np.linspace(0, 1, height).reshape(-1, 1)
+        gradient = np.tile(gradient, (1, width))
+    else:
+        gradient = np.linspace(0, 1, width).reshape(1, -1)
+        gradient = np.tile(gradient, (height, 1))
+        
+    return cmap(gradient)
+
+def geoms_to_path(geoms):
+    """
+    Convert a GeoSeries of Polygons/MultiPolygons to a single Matplotlib Path.
+    """
+    codes = []
+    verts = []
+    for geom in geoms:
+        if geom is None or geom.is_empty:
+            continue
+        
+        # Handle single Polygon
+        if geom.geom_type == 'Polygon':
+            gs = [geom]
+        # Handle MultiPolygon
+        elif geom.geom_type == 'MultiPolygon':
+            gs = geom.geoms
+        else:
+            continue
+            
+        for p in gs:
+            # Exterior ring
+            ext_coords = list(p.exterior.coords)
+            if ext_coords:
+                verts.extend(ext_coords)
+                # Structure: MOVETO, LINETO..., CLOSEPOLY
+                # We use the full coords list (including repeated end), but mark last as CLOSEPOLY
+                c = [Path.MOVETO] + [Path.LINETO] * (len(ext_coords) - 2) + [Path.CLOSEPOLY]
+                codes.extend(c)
+            
+            # Interior rings (holes)
+            for interior in p.interiors:
+                int_coords = list(interior.coords)
+                if int_coords:
+                    verts.extend(int_coords)
+                    c = [Path.MOVETO] + [Path.LINETO] * (len(int_coords) - 2) + [Path.CLOSEPOLY]
+                    codes.extend(c)
+    
+    if not verts:
+        return None
+        
+    return Path(verts, codes)
+
+def plot_feature(ax, gdf, theme_key, fallback_color, zorder, alpha=1.0):
+    """
+    Plot a feature (GeoDataFrame) with either solid color or gradient.
+    theme_key: key in THEME dict to look up (e.g., 'water')
+    """
+    if gdf is None or gdf.empty:
+        return
+
+    config = THEME.get(theme_key, fallback_color)
+    is_gradient, params = parse_color_config(config)
+    
+    if not is_gradient:
+        # Solid Color
+        gdf.plot(ax=ax, facecolor=params, edgecolor='none', alpha=alpha, zorder=zorder)
+    else:
+        # Gradient Fill
+        path = geoms_to_path(gdf.geometry)
+        if path is None:
+            return
+            
+        # Create a PathPatch (invisible) for clipping
+        patch = PathPatch(path, facecolor='none', edgecolor='none', zorder=zorder)
+        ax.add_patch(patch)
+        
+        # Get gradient params
+        colors = params.get('colors', ['#000000', '#FFFFFF'])
+        direction = params.get('direction', 'vertical')
+        
+        # Create gradient image
+        # Resolution 512x512 is usually enough for background textures
+        grad_img = create_gradient_array(512, 512, colors, direction)
+        
+        # Determine extent from the axes
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        
+        im = ax.imshow(grad_img, extent=[xlim[0], xlim[1], ylim[0], ylim[1]], 
+                       origin='lower', aspect='auto', zorder=zorder, alpha=alpha)
+        im.set_clip_path(patch)
+
+
+
+
+# Global cache for colormaps to optimize performance
+CMAP_CACHE = {}
+
+def get_cached_cmap(colors):
+    if isinstance(colors, list):
+        colors = tuple(colors)
+    if colors not in CMAP_CACHE:
+         CMAP_CACHE[colors] = mcolors.LinearSegmentedColormap.from_list(f'cmap_{hash(colors)}', colors)
+    return CMAP_CACHE[colors]
+
+def get_edge_colors_by_type(G, bounds=None):
     """
     Assigns colors to edges based on road type hierarchy.
-    Returns a list of colors corresponding to each edge in the graph.
+    Supports gradient colors for road types.
     """
     edge_colors = []
     
+    # Pre-calculate bounds if needed for gradients
+    if bounds is None:
+        # crude bounds calculation from nodes
+        try:
+            x_vals = [d['x'] for n, d in G.nodes(data=True)]
+            y_vals = [d['y'] for n, d in G.nodes(data=True)]
+            if x_vals and y_vals:
+                minx, maxx = min(x_vals), max(x_vals)
+                miny, maxy = min(y_vals), max(y_vals)
+                bounds = (minx, miny, maxx, maxy)
+            else:
+                bounds = (0, 0, 1, 1)
+        except:
+             bounds = (0, 0, 1, 1)
+
+    minx, miny, maxx, maxy = bounds
+    width = maxx - minx or 1.0
+    height = maxy - miny or 1.0
+    
     for u, v, data in G.edges(data=True):
-        # Get the highway type (can be a list or string)
         highway = data.get('highway', 'unclassified')
-        
-        # Handle list of highway types (take the first one)
         if isinstance(highway, list):
             highway = highway[0] if highway else 'unclassified'
-        
-        # Assign color based on road type
+            
+        # Determine strict key
         if highway in ['motorway', 'motorway_link']:
-            color = THEME['road_motorway']
+            key = 'road_motorway'
         elif highway in ['trunk', 'trunk_link', 'primary', 'primary_link']:
-            color = THEME['road_primary']
+            key = 'road_primary'
         elif highway in ['secondary', 'secondary_link']:
-            color = THEME['road_secondary']
+            key = 'road_secondary'
         elif highway in ['tertiary', 'tertiary_link']:
-            color = THEME['road_tertiary']
+            key = 'road_tertiary'
         elif highway in ['residential', 'living_street', 'unclassified']:
-            color = THEME['road_residential']
+            key = 'road_residential'
         else:
-            color = THEME['road_default']
+            key = 'road_default'
+            
+        config = THEME.get(key, '#3A3A3A')
+        is_gradient, params = parse_color_config(config)
         
-        edge_colors.append(color)
-    
+        if not is_gradient:
+            color = params
+        else:
+            # Calculate edge midpoint position for gradient sampling
+            try:
+                u_node = G.nodes[u]
+                v_node = G.nodes[v]
+                mid_x = (u_node['x'] + v_node['x']) / 2
+                mid_y = (u_node['y'] + v_node['y']) / 2
+                
+                direction = params.get('direction', 'vertical')
+                if direction == 'vertical':
+                    pos = (mid_y - miny) / height
+                else:
+                    pos = (mid_x - minx) / width
+                
+                # Clamp position
+                pos = max(0.0, min(1.0, pos))
+                
+                # Sample color from cached colormap
+                colors = params.get('colors', ['#000000', '#FFFFFF'])
+                cmap = get_cached_cmap(colors)
+                color = cmap(pos)
+                
+            except Exception:
+                # Fallback on error
+                color = '#000000'
+
+        edge_colors.append(mcolors.to_rgba(color))
+            
     return edge_colors
 
 def get_edge_widths_by_type(G):
@@ -445,6 +618,18 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
     ax.set_facecolor(THEME['bg'])
     ax.set_position([0, 0, 1, 1])
     
+    # Calculate and set bounds based on street network to ensure consistent gradient rendering
+    node_points = [(data['x'], data['y']) for node, data in G.nodes(data=True)]
+    bounds = None
+    if node_points:
+        xs, ys = zip(*node_points)
+        minx, maxx = min(xs), max(xs)
+        miny, maxy = min(ys), max(ys)
+        ax.set_xlim(minx, maxx)
+        ax.set_ylim(miny, maxy)
+        bounds = (minx, miny, maxx, maxy)
+
+    
     # 3. Plot Layers
     
     def filter_geom(gdf, geom_types):
@@ -468,20 +653,15 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
         coastlines.plot(ax=ax, edgecolor=THEME.get('coastline', '#1E90FF'), linewidth=1.25, facecolor='none', zorder=0.5)
     
     # Layer 1: Area fills - natural features
-    if forests is not None and not forests.empty:
-        forests.plot(ax=ax, facecolor=THEME.get('forest', '#228B22'), edgecolor='none', zorder=1)
-    if beaches is not None and not beaches.empty:
-        beaches.plot(ax=ax, facecolor=THEME.get('beach', '#F4A460'), edgecolor='none', zorder=1.2)
-    if water is not None and not water.empty:
-        water.plot(ax=ax, facecolor=THEME['water'], edgecolor='none', zorder=1.5)
+    plot_feature(ax, forests, 'forest', '#228B22', zorder=1)
+    plot_feature(ax, beaches, 'beach', '#F4A460', zorder=1.2)
+    # Using safe get for water default to match previous behavior
+    plot_feature(ax, water, 'water', '#C0C0C0', zorder=1.5)
     
     # Layer 2: Area fills - urban features
-    if parks is not None and not parks.empty:
-        parks.plot(ax=ax, facecolor=THEME['parks'], edgecolor='none', zorder=2)
-    if airports is not None and not airports.empty:
-        airports.plot(ax=ax, facecolor=THEME.get('airport', '#D3D3D3'), edgecolor='none', alpha=0.6, zorder=2.2)
-    if education is not None and not education.empty:
-        education.plot(ax=ax, facecolor=THEME.get('education', '#FFD700'), edgecolor='none', alpha=0.5, zorder=2.3)
+    plot_feature(ax, parks, 'parks', '#F0F0F0', zorder=2)
+    plot_feature(ax, airports, 'airport', '#D3D3D3', zorder=2.2, alpha=0.6)
+    plot_feature(ax, education, 'education', '#FFD700', zorder=2.3, alpha=0.5)
     
     # Layer 3: Point features
     if stadiums is not None and not stadiums.empty:
@@ -497,7 +677,7 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
     
     # Layer 2: Roads with hierarchy coloring
     print("Applying road hierarchy colors...")
-    edge_colors = get_edge_colors_by_type(G)
+    edge_colors = get_edge_colors_by_type(G, bounds)
     edge_widths = get_edge_widths_by_type(G)
     
     ox.plot_graph(
