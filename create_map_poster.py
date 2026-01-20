@@ -386,7 +386,8 @@ def get_coordinates(city, country):
     # Add a small delay to respect Nominatim's usage policy
     time.sleep(1)
     
-    location = geolocator.geocode(f"{city}, {country}")
+    # Use longer timeout to handle slow network conditions
+    location = geolocator.geocode(f"{city}, {country}", timeout=10)
     
     if location:
         print(f"✓ Found: {location.address}")
