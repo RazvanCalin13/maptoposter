@@ -1,0 +1,16 @@
+{
+    "name": "Bicing Dark",
+    "description": "Dark theme highlighting Bicing bike-sharing stations with vibrant red/pink dots",
+    "bg": "#000000",
+    "text": "#FFFFFF",
+    "gradient_color": "#000000",
+    "water": "#0A0A0A",
+    "parks": "#111111",
+    "bike_stations": "#FF1744",
+    "road_motorway": "#FFFFFF",
+    "road_primary": "#FF1744",
+    "road_secondary": "#B0B0B0",
+    "road_tertiary": "#FF1744",
+    "road_residential": "#505050",
+    "road_default": "#808080"
+}

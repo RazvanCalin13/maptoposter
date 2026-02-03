@@ -88,7 +88,7 @@ python create_map_poster.py --list-themes
 
 ## Themes
 
-17 themes available in `themes/` directory:
+18 themes available in `themes/` directory:
 
 | Theme | Style |
 |-------|-------|
@@ -109,6 +109,7 @@ python create_map_poster.py --list-themes
 | `autumn` | Seasonal burnt oranges and reds |
 | `copper_patina` | Oxidized copper aesthetic |
 | `monochrome_blue` | Single blue color family |
+| `bicing_dark` | Dark navy with red bike-sharing stations |
 
 ## Output
 
@@ -232,6 +233,7 @@ Create a JSON file in `themes/` directory:
 | `education` | Color | Universities, colleges, schools | `#FFD700` |
 | `worship` | Color | Places of worship (rendered as small circles) | `#8B4513` |
 | `airport` | Color | Airports, runways, aprons | `#D3D3D3` |
+| `bike_stations` | Color | Bike-sharing stations (e.g., Bicing, Citi Bike) | `#FF1744` |
 | `road_motorway` | Color | Highways, motorways | `#0A0A0A` |
 | `road_primary` | Color | Primary/trunk roads | `#1A1A1A` |
 | `road_secondary` | Color | Secondary roads | `#2A2A2A` |
@@ -293,6 +295,7 @@ The script fetches data from OpenStreetMap using the following tags:
 | **Education** | `amenity=[university, college, school]` | Filled polygons (semi-transparent) |
 | **Places of Worship** | `amenity=place_of_worship` | Small circle markers at centroid |
 | **Airports** | `aeroway=[aerodrome, runway, apron]` | Filled polygons (semi-transparent) |
+| **Bike Stations** | `amenity=bicycle_rental` | Small circle markers at station location |
 
 
 ## Project Structure

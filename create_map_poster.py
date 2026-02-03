@@ -417,7 +417,8 @@ def get_enabled_features(theme):
         'coastline': 'coastline',
         'education': 'education',
         'worship': 'worship',
-        'airport': 'airport'
+        'airport': 'airport',
+        'bike_stations': 'bike_stations'
     }
     
     enabled = {}
@@ -490,7 +491,7 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
     
     if cached_data is not None:
         # Unpack cached data
-        G, water, parks, stadiums, railways, forests, beaches, coastlines, education, worship, airports = cached_data
+        G, water, parks, stadiums, railways, forests, beaches, coastlines, education, worship, airports, bike_stations = cached_data
         print("✓ Using cached map data!")
     else:
         # Progress bar for data fetching (1 for streets + enabled features)
@@ -498,7 +499,7 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
         print("Downloading fresh map data...")
         
         # Initialize all features as None
-        water = parks = stadiums = railways = forests = beaches = coastlines = education = worship = airports = None
+        water = parks = stadiums = railways = forests = beaches = coastlines = education = worship = airports = bike_stations = None
         
         with tqdm(total=total_steps, desc="Fetching map data", unit="step", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
             # 1. Fetch Street Network (always needed)
@@ -605,12 +606,22 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
                 except:
                     airports = None
                 pbar.update(1)
+            
+            # 12. Fetch Bike Stations (conditional)
+            if enabled_features['bike_stations']:
+                pbar.set_description("Downloading bike-sharing stations")
+                try:
+                    bike_stations = ox.features_from_point(point, tags={'amenity': 'bicycle_rental'}, dist=dist)
+                except:
+                    bike_stations = None
+                pbar.update(1)
+                time.sleep(0.3)
         
         print("✓ All data downloaded successfully!")
         
         # Save to cache
         if use_cache:
-            cache_data = (G, water, parks, stadiums, railways, forests, beaches, coastlines, education, worship, airports)
+            cache_data = (G, water, parks, stadiums, railways, forests, beaches, coastlines, education, worship, airports, bike_stations)
             save_to_cache(cache_key, cache_data)
     
     # 2. Setup Plot
@@ -671,6 +682,9 @@ def create_poster(city, country, point, dist, output_file, use_cache=True, netwo
     if worship is not None and not worship.empty:
         # Plot places of worship as small points
         worship.geometry.centroid.plot(ax=ax, color=THEME.get('worship', '#8B4513'), markersize=30, zorder=3)
+    if bike_stations is not None and not bike_stations.empty:
+        # Plot bike-sharing stations as small points
+        bike_stations.geometry.centroid.plot(ax=ax, color=THEME.get('bike_stations', '#FF1744'), markersize=15, zorder=3)
     
     # Layer 4: Railways (before roads)
     if railways is not None and not railways.empty:
